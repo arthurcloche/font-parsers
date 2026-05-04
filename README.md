@@ -114,7 +114,19 @@ want to run the cross-format tests) into `fonts/` and update the paths at the
 top of the test files in `test/` to match.
 
 ```bash
-node test/run-all.mjs
+node test/run-all.mjs        # assertion suite (cross-format equality)
+node test/visual.mjs         # writes test/visual.html — visual cross-format diff
+```
+
+### Interactive playground
+
+`test/playground.html` is a single-file drag-and-drop tool to inspect any font
+you throw at it: outlines, per-glyph bounding boxes, advance widths, on-curve
+points, and Bézier control handles. Modules require an HTTP origin:
+
+```bash
+python3 -m http.server 8765
+open http://localhost:8765/test/playground.html
 ```
 
 Tests verify:

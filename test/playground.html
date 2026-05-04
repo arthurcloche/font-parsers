@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>font-parsers playground</title>
+<style>
+  :root {
+    --bg: #fafafa; --panel: #fff; --ink: #1c1c1c; --muted: #666; --line: #eee;
+    --accent: #5a4fcf; --bbox: #2a9d8f; --handle: #e63946; --baseline: #bbb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px ui-monospace, Menlo, monospace; background: var(--bg); color: var(--ink); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); }
+  main { display: grid; grid-template-columns: 320px 1fr; gap: 16px; padding: 16px 24px; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+  .panel h2 { font-size: 12px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  .drop {
+    border: 2px dashed #ccc; border-radius: 6px; padding: 24px 16px; text-align: center;
+    color: var(--muted); cursor: pointer; transition: 0.15s; user-select: none;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); color: var(--accent); background: #f5f3ff; }
+  .drop input { display: none; }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .control { margin-bottom: 12px; }
+  .control label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .control input[type=checkbox] { accent-color: var(--accent); }
+  .control input[type=text], .control input[type=number] {
+    width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff;
+  }
+  .control input[type=range] { width: 100%; accent-color: var(--accent); }
+  .control .val { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .stage { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 24px; min-height: 320px; overflow: auto; }
+  .stage svg { display: block; max-width: 100%; height: auto; }
+  .err { color: #c0392b; background: #fdecea; padding: 8px 12px; border-radius: 4px; margin-top: 8px; font-size: 12px; white-space: pre-wrap; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 12px; }
+  .legend span { display: inline-block; width: 10px; height: 10px; vertical-align: middle; margin-right: 4px; border-radius: 50%; }
+  details { margin-top: 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+  details pre { font-size: 11px; max-height: 200px; overflow: auto; background: #f4f4f4; padding: 8px; border-radius: 4px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>font-parsers playground</h1>
+  <span class="sub">drop a TTF / OTF / WOFF / WOFF2 to parse and visualize</span>
+</header>
+<main>
+  <aside class="panel">
+    <h2>Font</h2>
+    <label class="drop" id="drop">
+      <div><b>Drop a font here</b></div>
+      <div style="font-size:11px;margin-top:4px">or click to browse</div>
+      <input type="file" id="file" accept=".ttf,.otf,.woff,.woff2,font/*"/>
+    </label>
+    <div class="meta" id="info">No font loaded.</div>
+
+    <h2 style="margin-top:20px">Sample</h2>
+    <div class="control">
+      <input type="text" id="text" value="Handgloves &amp; Bézier 0123" maxlength="80"/>
+    </div>
+    <div class="control">
+      <label>Size <span class="val" id="sizeVal">120px</span></label>
+      <input type="range" id="size" min="24" max="400" step="2" value="120"/>
+    </div>
+
+    <h2 style="margin-top:20px">Overlays</h2>
+    <div class="control"><label><input type="checkbox" id="fill" checked/> Fill glyphs</label></div>
+    <div class="control"><label><input type="checkbox" id="stroke"/> Stroke outline</label></div>
+    <div class="control"><label><input type="checkbox" id="bbox"/> Per-glyph bounding boxes</label></div>
+    <div class="control"><label><input type="checkbox" id="advance"/> Advance widths</label></div>
+    <div class="control"><label><input type="checkbox" id="baseline" checked/> Baseline / em box</label></div>
+    <div class="control"><label><input type="checkbox" id="handles"/> Bézier handles &amp; on-curve points</label></div>
+    <div class="control"><label><input type="checkbox" id="oncurve"/> Endpoints only (no handles)</label></div>
+
+    <div class="legend">
+      <div><span style="background:var(--bbox)"></span>bbox / advance</div>
+      <div><span style="background:var(--handle)"></span>control point</div>
+      <div><span style="background:#222"></span>on-curve point</div>
+    </div>
+  </aside>
+
+  <section>
+    <div class="stage" id="stage">
+      <div style="color:var(--muted);text-align:center;padding:80px 0">Drop a font to begin.</div>
+    </div>
+    <div id="err"></div>
+    <details><summary>Debug: parsed font object</summary><pre id="debug">—</pre></details>
+  </section>
+</main>
+
+<script type="module">
+import { parseFont } from "../src/index.mjs";
+
+// Polyfill Path2D in case (mostly for completeness — browsers have it).
+globalThis.Path2D = globalThis.Path2D || class { moveTo(){} lineTo(){} quadraticCurveTo(){} bezierCurveTo(){} closePath(){} };
+
+const $ = id => document.getElementById(id);
+const stage = $("stage"), info = $("info"), err = $("err"), dbg = $("debug");
+
+let font = null, formatLabel = "—";
+
+// ── file handling ──
+const fileInput = $("file"), drop = $("drop");
+drop.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", e => e.target.files[0] && load(e.target.files[0]));
+["dragenter","dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => {
+  const f = e.dataTransfer.files[0];
+  if (f) load(f);
+});
+
+async function load(file) {
+  err.textContent = "";
+  try {
+    const buf = await file.arrayBuffer();
+    formatLabel = detectFormat(buf, file.name);
+    font = await parseFont(buf);
+    info.innerHTML = `
+      <b>${file.name}</b><br/>
+      format: <b>${formatLabel}</b> · size: ${(file.size/1024).toFixed(1)} KB<br/>
+      unitsPerEm: <b>${font.head.unitsPerEm}</b> · asc: ${font.hhea.asc} · desc: ${font.hhea.desc}<br/>
+      ${font.fvar ? `variable: <b>${font.fvar[0].length} axes</b>` : "static font"}
+    `;
+    dbg.textContent = JSON.stringify({
+      head: font.head, hhea: font.hhea,
+      fvar: font.fvar ? "[axes data]" : null,
+    }, null, 2);
+    render();
+  } catch (e) {
+    err.innerHTML = `<div class="err">${e.message}\n${e.stack?.split("\n").slice(0,3).join("\n") ?? ""}</div>`;
+    console.error(e);
+  }
+}
+
+function detectFormat(buf, name) {
+  const v = new DataView(buf);
+  const m = v.getUint32(0);
+  if (m === 0x00010000 || m === 0x74727565) return "TTF (glyf)";
+  if (m === 0x4f54544f) return "OTF (CFF)";
+  if (m === 0x774f4646) return "WOFF";
+  if (m === 0x774f4632) return "WOFF2";
+  return name.split(".").pop().toUpperCase();
+}
+
+// ── inputs ──
+for (const id of ["text","size","fill","stroke","bbox","advance","baseline","handles","oncurve"]) {
+  $(id).addEventListener("input", () => { if (font) render(); });
+}
+$("size").addEventListener("input", e => $("sizeVal").textContent = e.target.value + "px");
+
+// ── walk a raw command stream (post-scaled) and emit visuals ──
+// Returns { d, handleSVG, bboxX0, bboxX1, bboxY0, bboxY1 }.
+// Cmds use the parser's opcode convention: 0=M, 1=L, 2=Q, 3=Z, 4=C; y is flipped (-y).
+function processGlyph(cmds, scale) {
+  let d = "", x = 0, y = 0;
+  let mx = +Infinity, MX = -Infinity, my = +Infinity, MY = -Infinity;
+  const handles = [];   // {type:"handle"|"on", cx, cy} in scaled local coords
+  const ctrlLines = []; // {x1,y1,x2,y2}
+  const tally = (px, py) => {
+    if (px < mx) mx = px; if (px > MX) MX = px;
+    if (py < my) my = py; if (py > MY) MY = py;
+  };
+  for (let i = 0; i < cmds.length;) {
+    const op = cmds[i];
+    if (op === 0) {
+      const nx = cmds[i+1] * scale, ny = -cmds[i+2] * scale;
+      d += `M${nx} ${ny}`;
+      handles.push({ type: "on", cx: nx, cy: ny });
+      tally(nx, ny);
+      x = nx; y = ny; i += 3;
+    } else if (op === 1) {
+      const nx = cmds[i+1] * scale, ny = -cmds[i+2] * scale;
+      d += `L${nx} ${ny}`;
+      handles.push({ type: "on", cx: nx, cy: ny });
+      tally(nx, ny);
+      x = nx; y = ny; i += 3;
+    } else if (op === 2) {
+      const cx = cmds[i+1]*scale, cy = -cmds[i+2]*scale;
+      const nx = cmds[i+3]*scale, ny = -cmds[i+4]*scale;
+      d += `Q${cx} ${cy} ${nx} ${ny}`;
+      handles.push({ type: "handle", cx, cy });
+      handles.push({ type: "on", cx: nx, cy: ny });
+      ctrlLines.push({ x1: x, y1: y, x2: cx, y2: cy });
+      ctrlLines.push({ x1: cx, y1: cy, x2: nx, y2: ny });
+      tally(cx, cy); tally(nx, ny);
+      x = nx; y = ny; i += 5;
+    } else if (op === 4) {
+      const c1x = cmds[i+1]*scale, c1y = -cmds[i+2]*scale;
+      const c2x = cmds[i+3]*scale, c2y = -cmds[i+4]*scale;
+      const nx  = cmds[i+5]*scale, ny  = -cmds[i+6]*scale;
+      d += `C${c1x} ${c1y} ${c2x} ${c2y} ${nx} ${ny}`;
+      handles.push({ type: "handle", cx: c1x, cy: c1y });
+      handles.push({ type: "handle", cx: c2x, cy: c2y });
+      handles.push({ type: "on", cx: nx, cy: ny });
+      ctrlLines.push({ x1: x, y1: y, x2: c1x, y2: c1y });
+      ctrlLines.push({ x1: c2x, y1: c2y, x2: nx, y2: ny });
+      tally(c1x, c1y); tally(c2x, c2y); tally(nx, ny);
+      x = nx; y = ny; i += 7;
+    } else {
+      d += "Z"; i++;
+    }
+  }
+  return { d, handles, ctrlLines, bbox: { mx, MX, my, MY } };
+}
+
+// ── render ──
+function render() {
+  if (!font) return;
+  const text = $("text").value || " ";
+  const size = +$("size").value;
+  const showFill = $("fill").checked;
+  const showStroke = $("stroke").checked;
+  const showBBox = $("bbox").checked;
+  const showAdvance = $("advance").checked;
+  const showBaseline = $("baseline").checked;
+  const showHandles = $("handles").checked;
+  const showOncurve = $("oncurve").checked;
+
+  const layout = font.toSVG(text, size);
+  const upemInv = 1 / font.head.unitsPerEm;
+  const scale = size * upemInv;
+  const ascPx = font.hhea.asc * scale;
+  const descPx = font.hhea.desc * scale; // negative
+
+  // overall y bounds: top of asc → bottom of desc, across all letters
+  const yMin = Math.min(...layout.letters.map(L => L.center.y)) - ascPx;
+  const yMax = Math.max(...layout.letters.map(L => L.center.y)) - descPx;
+  const blockH = yMax - yMin;
+  const blockW = layout.block.width;
+  const PAD = 24;
+  const W = blockW + PAD * 2;
+  const H = blockH + PAD * 2;
+  const yShift = PAD - yMin;
+
+  // Build per-letter visualizations from raw cmds (so we can do bbox/handles).
+  const letterSVGs = layout.letters.map(L => {
+    const cmds = font.toGlyphPath(L.gid);
+    const { d, handles, ctrlLines, bbox } = processGlyph(cmds, scale);
+    const baseline = `translate(${L.center.x},${L.center.y})`;
+
+    let svg = `<g transform="${baseline}">`;
+    if (showFill) svg += `<path d="${d}" fill="#1c1c1c" fill-rule="evenodd"/>`;
+    if (showStroke) svg += `<path d="${d}" fill="none" stroke="#1c1c1c" stroke-width="0.75" fill-rule="evenodd"/>`;
+    if (showBBox && bbox.mx !== Infinity) {
+      svg += `<rect x="${bbox.mx}" y="${bbox.my}" width="${bbox.MX - bbox.mx}" height="${bbox.MY - bbox.my}" fill="none" stroke="var(--bbox)" stroke-width="0.75" stroke-dasharray="3 2"/>`;
+    }
+    if (showAdvance) {
+      svg += `<rect x="0" y="${-ascPx}" width="${L.width}" height="${ascPx - descPx}" fill="none" stroke="var(--bbox)" stroke-width="0.5" opacity="0.4"/>`;
+    }
+    if (showHandles) {
+      for (const cl of ctrlLines)
+        svg += `<line x1="${cl.x1}" y1="${cl.y1}" x2="${cl.x2}" y2="${cl.y2}" stroke="var(--handle)" stroke-width="0.5" opacity="0.6"/>`;
+      for (const h of handles) {
+        if (h.type === "handle")
+          svg += `<circle cx="${h.cx}" cy="${h.cy}" r="2" fill="var(--handle)"/>`;
+        else
+          svg += `<circle cx="${h.cx}" cy="${h.cy}" r="2.2" fill="#1c1c1c"/>`;
+      }
+    } else if (showOncurve) {
+      for (const h of handles) {
+        if (h.type === "on")
+          svg += `<circle cx="${h.cx}" cy="${h.cy}" r="2" fill="#1c1c1c"/>`;
+      }
+    }
+    svg += `</g>`;
+    return svg;
+  }).join("");
+
+  // baseline / em-box guides at the layout level
+  let guides = "";
+  if (showBaseline) {
+    const baselineY = (layout.letters[0]?.center.y ?? 0);
+    guides += `<line x1="0" y1="${baselineY}" x2="${blockW}" y2="${baselineY}" stroke="var(--baseline)" stroke-width="0.5"/>`;
+    guides += `<line x1="0" y1="${baselineY - ascPx}" x2="${blockW}" y2="${baselineY - ascPx}" stroke="var(--baseline)" stroke-width="0.5" stroke-dasharray="2 3"/>`;
+    guides += `<line x1="0" y1="${baselineY - descPx}" x2="${blockW}" y2="${baselineY - descPx}" stroke="var(--baseline)" stroke-width="0.5" stroke-dasharray="2 3"/>`;
+  }
+
+  stage.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+      <g transform="translate(${PAD},${yShift})">
+        ${guides}
+        ${letterSVGs}
+      </g>
+    </svg>
+  `;
+}
+</script>
+</body>
+</html>

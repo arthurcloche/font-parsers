@@ -542,6 +542,7 @@ export function makeFont(parsed, getGlyph) {
     width: L.w,
     height: L.h,
     center: { x: L.x, y: L.y },
+    gid: L.gl.g,
   });
 
   return {
