@@ -109,7 +109,9 @@ pulls everything (~24 KB gz including the brotli/deflate wrappers).
 
 ## Testing
 
-The Antique Legacy Medium font is included in 4 formats so we can cross-verify:
+Tests are not bundled with a font. Drop your own font (in all 4 formats if you
+want to run the cross-format tests) into `fonts/` and update the paths at the
+top of the test files in `test/` to match.
 
 ```bash
 node test/run-all.mjs

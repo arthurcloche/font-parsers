@@ -2,6 +2,9 @@ node_modules/
 .DS_Store
 *.log
 Antique-Legacy-Medium/
+fonts/*
+!fonts/README.md
+!fonts/.gitkeep
 *.otf
 *.ttf
 *.woff
