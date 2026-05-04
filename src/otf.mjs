@@ -154,17 +154,10 @@ function parseFDSelect(b, off, nGlyphs) {
 
 const subrBias = n => n < 1240 ? 107 : n < 33900 ? 1131 : 32768;
 
-// Approximate one cubic (P0..P3) with two quadratics joined at the cubic's t=0.5
-// midpoint M. Each half's quadratic control point matches the cubic's tangent
-// at the corresponding endpoint (the standard "two-quad cubic approximation").
-// Visually indistinguishable from a true cubic at typical type sizes.
+// Emit one true cubic into the path stream (opcode 4). x0/y0 are the implicit
+// pen position before the curve; only the three remaining points are stored.
 function emitCubic(out, x0, y0, x1, y1, x2, y2, x3, y3) {
-  const mx = (x0 + 3*x1 + 3*x2 + x3) / 8;
-  const my = (y0 + 3*y1 + 3*y2 + y3) / 8;
-  const c1x = (3*x1 - x0) / 2,  c1y = (3*y1 - y0) / 2;
-  const c2x = (3*x2 - x3) / 2,  c2y = (3*y2 - y3) / 2;
-  out.push(2, c1x, c1y, mx, my);
-  out.push(2, c2x, c2y, x3, y3);
+  out.push(4, x1, y1, x2, y2, x3, y3);
 }
 
 function execCharString(cs, gsubrs, lsubrs, out) {

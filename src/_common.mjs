@@ -402,6 +402,12 @@ export function layout(font, text, fontSize, opts = {}) {
 }
 
 // ───────────── path stream → Path2D / SVG / Points ─────────────
+// Path command stream opcodes:
+//   0 = moveTo  (x, y)
+//   1 = lineTo  (x, y)
+//   2 = quadTo  (cx, cy, x, y)
+//   3 = closePath
+//   4 = cubicTo (c1x, c1y, c2x, c2y, x, y)   ← used by CFF (OTF/WOFF/WOFF2-CFF)
 export function pathToPath2D(cmds, scale) {
   const p = new Path2D();
   for (let i = 0; i < cmds.length;) {
@@ -409,6 +415,7 @@ export function pathToPath2D(cmds, scale) {
     if (op === 0)      { p.moveTo(cmds[i + 1] * scale, -cmds[i + 2] * scale); i += 3; }
     else if (op === 1) { p.lineTo(cmds[i + 1] * scale, -cmds[i + 2] * scale); i += 3; }
     else if (op === 2) { p.quadraticCurveTo(cmds[i + 1] * scale, -cmds[i + 2] * scale, cmds[i + 3] * scale, -cmds[i + 4] * scale); i += 5; }
+    else if (op === 4) { p.bezierCurveTo(cmds[i + 1] * scale, -cmds[i + 2] * scale, cmds[i + 3] * scale, -cmds[i + 4] * scale, cmds[i + 5] * scale, -cmds[i + 6] * scale); i += 7; }
     else               { p.closePath(); i++; }
   }
   return p;
@@ -421,6 +428,7 @@ export function pathToSVG(cmds, scale) {
     if (op === 0)      { d += `M${r(cmds[i + 1] * scale)} ${r(-cmds[i + 2] * scale)}`; i += 3; }
     else if (op === 1) { d += `L${r(cmds[i + 1] * scale)} ${r(-cmds[i + 2] * scale)}`; i += 3; }
     else if (op === 2) { d += `Q${r(cmds[i + 1] * scale)} ${r(-cmds[i + 2] * scale)} ${r(cmds[i + 3] * scale)} ${r(-cmds[i + 4] * scale)}`; i += 5; }
+    else if (op === 4) { d += `C${r(cmds[i + 1] * scale)} ${r(-cmds[i + 2] * scale)} ${r(cmds[i + 3] * scale)} ${r(-cmds[i + 4] * scale)} ${r(cmds[i + 5] * scale)} ${r(-cmds[i + 6] * scale)}`; i += 7; }
     else               { d += "Z"; i++; }
   }
   return d;
@@ -447,6 +455,18 @@ export function samplePath(cmds, density) {
       const d = (Math.hypot(nx - x, ny - y) + Math.hypot(cx - x, cy - y) + Math.hypot(nx - cx, ny - cy)) / 2;
       cur.push(1, x, y, cx, cy, nx, ny, d, len);
       len += d; x = nx; y = ny; i += 5;
+    } else if (op === 4) {
+      const c1x = cmds[i + 1], c1y = cmds[i + 2];
+      const c2x = cmds[i + 3], c2y = cmds[i + 4];
+      const nx  = cmds[i + 5], ny  = cmds[i + 6];
+      // length approx: avg of chord & control polygon perimeter
+      const chord = Math.hypot(nx - x, ny - y);
+      const poly  = Math.hypot(c1x - x, c1y - y)
+                  + Math.hypot(c2x - c1x, c2y - c1y)
+                  + Math.hypot(nx - c2x, ny - c2y);
+      const d = (chord + poly) / 2;
+      cur.push(2, x, y, c1x, c1y, c2x, c2y, nx, ny, d, len);
+      len += d; x = nx; y = ny; i += 7;
     } else {
       if (cur) { contours.push(cur); lengths.push(len); }
       cur = null; len = 0; i++;
@@ -473,7 +493,7 @@ export function samplePath(cmds, density) {
             break;
           }
           k += 7;
-        } else {
+        } else if (seg[k] === 1) {
           const start = seg[k + 8], segLen = seg[k + 7];
           if (target >= start && target <= start + segLen) {
             const t = (target - start) / segLen, u = 1 - t;
@@ -485,6 +505,19 @@ export function samplePath(cmds, density) {
             break;
           }
           k += 9;
+        } else { // cubic
+          const start = seg[k + 10], segLen = seg[k + 9];
+          if (target >= start && target <= start + segLen) {
+            const t = (target - start) / segLen, u = 1 - t;
+            const u2 = u * u, t2 = t * t;
+            pts.push({
+              x: u2*u*seg[k+1] + 3*u2*t*seg[k+3] + 3*u*t2*seg[k+5] + t2*t*seg[k+7],
+              y: u2*u*seg[k+2] + 3*u2*t*seg[k+4] + 3*u*t2*seg[k+6] + t2*t*seg[k+8],
+              c,
+            });
+            break;
+          }
+          k += 11;
         }
       }
     }

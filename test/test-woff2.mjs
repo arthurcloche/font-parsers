@@ -8,8 +8,8 @@ globalThis.Path2D = globalThis.Path2D || class {
   moveTo() {} lineTo() {} quadraticCurveTo() {} closePath() {}
 };
 
-const woff2Buf = fs.readFileSync("Antique-Legacy-Medium/Antique-Legacy-Medium.woff2").buffer;
-const otfBuf   = fs.readFileSync("Antique-Legacy-Medium/Antique-Legacy-Medium.otf").buffer;
+const woff2Buf = fs.readFileSync("fonts/Antique-Legacy-Medium.woff2").buffer;
+const otfBuf   = fs.readFileSync("fonts/Antique-Legacy-Medium.otf").buffer;
 
 let pass = 0, fail = 0;
 const test = (name, ok, info = "") => {

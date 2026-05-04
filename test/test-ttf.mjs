@@ -9,7 +9,7 @@ globalThis.Path2D = globalThis.Path2D || class {
   moveTo() {} lineTo() {} quadraticCurveTo() {} closePath() {}
 };
 
-const fontPath = "Antique-Legacy-Medium/Antique-Legacy-Medium.ttf";
+const fontPath = "fonts/Antique-Legacy-Medium.ttf";
 const buf = fs.readFileSync(fontPath).buffer;
 
 const ours = parseTTF(buf);

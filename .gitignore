@@ -9,3 +9,4 @@ fonts/*
 *.ttf
 *.woff
 *.woff2
+test/visual.html

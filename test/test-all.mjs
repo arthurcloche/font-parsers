@@ -8,7 +8,7 @@ globalThis.Path2D = globalThis.Path2D || class {
   moveTo() {} lineTo() {} quadraticCurveTo() {} closePath() {}
 };
 
-const dir = "Antique-Legacy-Medium";
+const dir = "fonts";
 const files = {
   ttf:   `${dir}/Antique-Legacy-Medium.ttf`,
   otf:   `${dir}/Antique-Legacy-Medium.otf`,
