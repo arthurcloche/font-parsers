@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+*.log
+Antique-Legacy-Medium/
+*.otf
+*.ttf
+*.woff
+*.woff2
