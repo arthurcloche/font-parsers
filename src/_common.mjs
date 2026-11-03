@@ -1,10 +1,11 @@
 // Shared helpers for TTF / OTF / WOFF / WOFF2 parsers.
 // Format-agnostic: binary IO, cmap, fvar/avar/HVAR, hmtx, kern, layout, paths.
-// Path command stream encoding (used by both ttf.mjs and otf.mjs glyph builders):
+// Path command stream encoding (emitted by the ttf.mjs and otf.mjs glyph builders):
 //   0, x, y                  → moveTo
 //   1, x, y                  → lineTo
-//   2, cx, cy, x, y          → quadraticCurveTo
+//   2, cx, cy, x, y          → quadraticCurveTo      (glyf)
 //   3                        → closePath
+//   4, c1x, c1y, c2x, c2y, x, y → bezierCurveTo      (CFF)
 
 // ───────────── binary IO ─────────────
 const _buf = new ArrayBuffer(4);
@@ -607,4 +608,37 @@ export function readSfntDirectory(bytes) {
     p += 16;
   }
   return { tables, numTables };
+}
+
+// Build an sfnt (TTF/OTF) ArrayBuffer from `[{ tag, data }]`: directory sorted by tag,
+// tables 4-byte padded, checksums and search fields left 0 (our walker ignores them).
+// Shared by the WOFF and WOFF2 unwrappers.
+export function buildSfnt(flavor, tables) {
+  tables = [...tables].sort((a, b) => (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
+  const dirSize = 12 + tables.length * 16;
+  let size = dirSize;
+  for (const t of tables) size += (t.data.length + 3) & ~3;
+  const out = new Uint8Array(size), v = new DataView(out.buffer);
+  v.setUint32(0, flavor);
+  v.setUint16(4, tables.length);
+  let dp = 12, cursor = dirSize;
+  for (const { tag, data } of tables) {
+    for (let i = 0; i < 4; i++) out[dp + i] = tag.charCodeAt(i);
+    v.setUint32(dp + 8, cursor);
+    v.setUint32(dp + 12, data.length);
+    out.set(data, cursor);
+    dp += 16;
+    cursor += (data.length + 3) & ~3;
+  }
+  return out.buffer;
+}
+
+// Platform decompression: 'deflate' (zlib), 'deflate-raw', 'gzip', or 'brotli' where
+// supported. The stream is built by hand rather than via Blob.stream(), which some DOM
+// implementations (e.g. jsdom) lack. Rejects if the format is unsupported.
+export async function inflate(bytes, format) {
+  const stream = new ReadableStream({
+    start(c) { c.enqueue(bytes); c.close(); },
+  }).pipeThrough(new DecompressionStream(format));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
