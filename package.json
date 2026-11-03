@@ -1,0 +1,21 @@
+{
+  "name": "font-parsers",
+  "version": "0.1.0",
+  "description": "minimal font parsers for TTF, OTF, WOFF & WOFF2",
+  "type": "module",
+  "private": true,
+  "sideEffects": false,
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./ttf": "./src/ttf.mjs",
+    "./otf": "./src/otf.mjs",
+    "./woff": "./src/woff.mjs",
+    "./woff2": "./src/woff2.mjs",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test/run-all.mjs"
+  }
+}
