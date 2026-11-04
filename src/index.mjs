@@ -10,29 +10,29 @@
 
 import { u32 } from "./_common.mjs";
 
+const FORMATS = {
+  0x00010000: "ttf",
+  0x74727565: "ttf",   // 'true'
+  0x4f54544f: "otf",   // 'OTTO' — OTF / CFF
+  0x774f4646: "woff",  // 'wOFF'
+  0x774f4632: "woff2", // 'wOF2'
+};
+
+// → "ttf" | "otf" | "woff" | "woff2" (throws on anything else)
+export function detectFontFormat(buffer) {
+  if (buffer.byteLength < 4) throw new Error("Invalid font file: expected at least 4 bytes");
+  const magic = u32(new Uint8Array(buffer), 0);
+  const format = FORMATS[magic];
+  if (!format) throw new Error(`Unknown font magic: 0x${magic.toString(16).padStart(8, "0")}`);
+  return format;
+}
+
 export async function parseFont(buffer, opts = {}) {
-  const b = new Uint8Array(buffer);
-  const magic = u32(b, 0);
-  switch (magic) {
-    case 0x00010000:                    // TTF
-    case 0x74727565: {                  // 'true'
-      const { parseTTF } = await import("./ttf.mjs");
-      return parseTTF(buffer);
-    }
-    case 0x4f54544f: {                  // 'OTTO' — OTF / CFF
-      const { parseOTF } = await import("./otf.mjs");
-      return parseOTF(buffer);
-    }
-    case 0x774f4646: {                  // 'wOFF' — WOFF
-      const { parseWOFF } = await import("./woff.mjs");
-      return parseWOFF(buffer, opts);
-    }
-    case 0x774f4632: {                  // 'wOF2' — WOFF2
-      const { parseWOFF2 } = await import("./woff2.mjs");
-      return parseWOFF2(buffer, opts);
-    }
-    default:
-      throw new Error(`Unknown font magic: 0x${magic.toString(16).padStart(8, "0")}`);
+  switch (detectFontFormat(buffer)) {
+    case "ttf":   return (await import("./ttf.mjs")).parseTTF(buffer);
+    case "otf":   return (await import("./otf.mjs")).parseOTF(buffer);
+    case "woff":  return (await import("./woff.mjs")).parseWOFF(buffer);
+    case "woff2": return (await import("./woff2.mjs")).parseWOFF2(buffer, opts);
   }
 }
 

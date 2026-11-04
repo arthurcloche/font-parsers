@@ -103,6 +103,11 @@ const stage = $("stage"), info = $("info"), err = $("err"), dbg = $("debug");
 
 let font = null, formatLabel = "—";
 
+// Browsers don't ship brotli in DecompressionStream yet, so WOFF2 needs a decoder.
+// Loaded on first use only; pinned so the playground keeps working.
+const wasmBrotli = async bytes =>
+  (await (await import("https://cdn.jsdelivr.net/npm/brotli-dec-wasm@2.3.2/index.js")).default).decompress(bytes);
+
 // ── file handling ──
 const fileInput = $("file"), drop = $("drop");
 drop.addEventListener("click", () => fileInput.click());
@@ -119,7 +124,7 @@ async function load(file) {
   try {
     const buf = await file.arrayBuffer();
     formatLabel = detectFormat(buf, file.name);
-    font = await parseFont(buf);
+    font = await parseFont(buf, { brotli: wasmBrotli });
     info.innerHTML = `
       <b>${file.name}</b><br/>
       format: <b>${formatLabel}</b> · size: ${(file.size/1024).toFixed(1)} KB<br/>

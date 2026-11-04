@@ -9,17 +9,19 @@
 // a high-level `parseWOFF2` that auto-delegates to TTF / OTF.
 //
 // Brotli decoder, in order:
-//   1. globalThis.DecompressionStream('br')   — Chrome 137+ / Safari 18+
-//   2. node:zlib.brotliDecompressSync         — Node 11.7+
-//   3. throws — caller can pass `{ brotli: fn }` to parseWOFF2()
+//   1. `{ brotli: fn }` passed to parseWOFF2() — fn(Uint8Array) → Uint8Array | Promise
+//   2. DecompressionStream('brotli')          — recent Node (24 verified); browsers don't ship it
+//                                               yet (not in Chrome 156), so browsers
+//                                               need (1), e.g. a wasm decoder
+//   3. node:zlib.brotliDecompressSync         — older Node
+//   4. throws
 //
 // `parseWOFF2` is async.
 
-import { u16, u32 } from "./_common.mjs";
+import { u16, u32, inflate, buildSfnt } from "./_common.mjs";
 
 // ───────────── header / signature ─────────────
 const WOFF2_SIG  = 0x774f4632; // "wOF2"
-const TTF_FLAVOR = 0x00010000;
 const OTF_FLAVOR = 0x4f54544f; // "OTTO"
 
 // Known WOFF2 table tags (index 0..62; 63 = full-tag follows).
@@ -35,22 +37,22 @@ const KNOWN_TAGS = [
 ];
 
 // ───────────── platform brotli ─────────────
+// Built-ins on Node 20.16+ need no import. The opaque dynamic import is the older-Node
+// fallback; a literal import("node:zlib") would make browser bundlers try to resolve it.
+const loadNodeZlib = () =>
+  process.getBuiltinModule?.("node:zlib") ?? new Function("return import('node:zlib')")();
+
 async function brotliDecompress(bytes, custom) {
   if (custom) return custom(bytes);
-  if (typeof DecompressionStream !== "undefined") {
-    try {
-      const ds = new DecompressionStream("br");
-      const stream = new Blob([bytes]).stream().pipeThrough(ds);
-      const ab = await new Response(stream).arrayBuffer();
-      return new Uint8Array(ab);
-    } catch { /* fall through */ }
-  }
+  let cause;
+  try { return await inflate(bytes, "brotli"); } catch (e) { cause = e; }
   if (typeof process !== "undefined" && process.versions?.node) {
-    const { brotliDecompressSync } = await import("node:zlib");
+    const { brotliDecompressSync } = await loadNodeZlib();
     return brotliDecompressSync(bytes);
   }
   throw new Error(
-    "WOFF2: no brotli decoder available. Pass `{ brotli: fn }` to parseWOFF2()"
+    "WOFF2: no brotli decoder available here. Pass `{ brotli: bytes => Uint8Array }` to parseWOFF2()",
+    { cause }
   );
 }
 
@@ -78,54 +80,34 @@ class Reader {
   }
 }
 
-// ───────────── triplet table (WOFF2 §5.2 Table 6) ─────────────
-// 128 rows: { nBytes, xBits, yBits, deltaX, deltaY, xSign, ySign }.
-// nBytes counts the flag byte (so coords use nBytes-1 bytes from glyphStream).
-const TRIPLET_TABLE = (() => {
-  const rows = [];
-  // 0..9: x = 0 bits, y = 8 bits
-  for (const dy of [0, 256, 512, 768, 1024])
-    for (const ys of [-1, 1])
-      rows.push({ nBytes: 2, xBits: 0, yBits: 8, deltaX: 0, deltaY: dy, xSign: 0, ySign: ys });
-  // 10..19: x = 8 bits, y = 0 bits
-  for (const dx of [0, 256, 512, 768, 1024])
-    for (const xs of [-1, 1])
-      rows.push({ nBytes: 2, xBits: 8, yBits: 0, deltaX: dx, deltaY: 0, xSign: xs, ySign: 0 });
-  // 20..83: 4+4 bits, 4×4×2×2 = 64. Note: ySign is OUTER, xSign is INNER
-  // (per Google's reference woff2 table; the encoded code is shaped that way).
-  for (const dx of [1, 17, 33, 49])
-    for (const dy of [1, 17, 33, 49])
-      for (const ys of [-1, 1])
-        for (const xs of [-1, 1])
-          rows.push({ nBytes: 2, xBits: 4, yBits: 4, deltaX: dx, deltaY: dy, xSign: xs, ySign: ys });
-  // 84..119: 8+8 bits, 3×3×2×2 = 36
-  for (const dx of [1, 257, 513])
-    for (const dy of [1, 257, 513])
-      for (const ys of [-1, 1])
-        for (const xs of [-1, 1])
-          rows.push({ nBytes: 3, xBits: 8, yBits: 8, deltaX: dx, deltaY: dy, xSign: xs, ySign: ys });
-  // 120..123: 12+12 bits
-  for (const ys of [-1, 1])
-    for (const xs of [-1, 1])
-      rows.push({ nBytes: 4, xBits: 12, yBits: 12, deltaX: 0, deltaY: 0, xSign: xs, ySign: ys });
-  // 124..127: 16+16 bits
-  for (const ys of [-1, 1])
-    for (const xs of [-1, 1])
-      rows.push({ nBytes: 5, xBits: 16, yBits: 16, deltaX: 0, deltaY: 0, xSign: xs, ySign: ys });
-  return rows;
-})();
-
-function readTriplet(gS, code) {
-  const row = TRIPLET_TABLE[code];
-  // Read (nBytes - 1) data bytes (flag was already consumed).
-  let raw = 0;
-  for (let i = 1; i < row.nBytes; i++) raw = raw * 256 + gS.b[gS.p++];
-  // y in low bits, x in high bits. (nBits=0 ⇒ that axis is fixed at 0.)
-  const yMask = row.yBits ? (1 << row.yBits) - 1 : 0;
-  const yRaw = raw & yMask;
-  const xRaw = row.yBits ? (raw >>> row.yBits) : raw;
-  const dx = row.xSign ? (xRaw + row.deltaX) * row.xSign : 0;
-  const dy = row.ySign ? (yRaw + row.deltaY) * row.ySign : 0;
+// ───────────── triplet decoding (WOFF2 §5.2) ─────────────
+// Flag `f` (0..127) selects how many coordinate bytes follow and how to build (dx, dy).
+// dx takes its sign from bit 0 of f, dy from bit 1 (bit 0 for the dy-only flags 0..9).
+const sgn = (f, k, v) => (f >> k & 1 ? v : -v);
+function readTriplet(gS, f) {
+  const { b, p } = gS;
+  let n = 1, dx = 0, dy = 0;
+  if (f < 10) dy = sgn(f, 0, ((f & 14) << 7) + b[p]);
+  else if (f < 20) dx = sgn(f, 0, (((f - 10) & 14) << 7) + b[p]);
+  else if (f < 84) {
+    const k = f - 20;
+    dx = sgn(f, 0, 1 + (k & 48) + (b[p] >> 4));
+    dy = sgn(f, 1, 1 + ((k & 12) << 2) + (b[p] & 15));
+  } else if (f < 120) {
+    const k = f - 84;
+    n = 2;
+    dx = sgn(f, 0, 1 + ((k / 12 | 0) << 8) + b[p]);
+    dy = sgn(f, 1, 1 + ((k % 12 >> 2) << 8) + b[p + 1]);
+  } else if (f < 124) {
+    n = 3;
+    dx = sgn(f, 0, (b[p] << 4) + (b[p + 1] >> 4));
+    dy = sgn(f, 1, ((b[p + 1] & 15) << 8) + b[p + 2]);
+  } else {
+    n = 4;
+    dx = sgn(f, 0, (b[p] << 8) + b[p + 1]);
+    dy = sgn(f, 1, (b[p + 2] << 8) + b[p + 3]);
+  }
+  gS.p += n; // the flag byte was already consumed
   return [dx, dy];
 }
 
@@ -133,7 +115,7 @@ function readTriplet(gS, code) {
 function reconstructGlyf(transformed) {
   const r = new Reader(transformed);
   /* reserved */ r.u16();
-  const optionFlags     = r.u16();
+  r.u16(); // optionFlags
   const numGlyphs       = r.u16();
   const indexFormat     = r.u16();
   const nContourSize    = r.u32();
@@ -383,51 +365,12 @@ export async function decompressWOFF2(buffer, opts = {}) {
     rawTables.loca = { ...rawTables.loca, transformed: false };
   }
 
-  // ── build SFNT ──
-  const tagsSorted = Object.keys(rawTables).sort();
-  const dirSize = 12 + tagsSorted.length * 16;
-  let bodySize = 0;
-  const padded = tagsSorted.map(t => {
-    const d = rawTables[t].data;
-    const pad = (4 - (d.length & 3)) & 3;
-    bodySize += d.length + pad;
-    return { tag: t, data: d, pad };
-  });
-  const sfnt = new Uint8Array(dirSize + bodySize);
-  // header: scaler + numTables (search fields left at 0; our parser ignores them)
-  sfnt[0] = (flavorRaw >>> 24) & 0xff;
-  sfnt[1] = (flavorRaw >>> 16) & 0xff;
-  sfnt[2] = (flavorRaw >>> 8)  & 0xff;
-  sfnt[3] =  flavorRaw         & 0xff;
-  sfnt[4] = (tagsSorted.length >>> 8) & 0xff;
-  sfnt[5] =  tagsSorted.length        & 0xff;
-
-  let cursor2 = dirSize;
-  let dp = 12;
-  for (const e of padded) {
-    sfnt.set([
-      e.tag.charCodeAt(0), e.tag.charCodeAt(1),
-      e.tag.charCodeAt(2), e.tag.charCodeAt(3),
-    ], dp);
-    sfnt[dp + 8]  = (cursor2 >>> 24) & 0xff;
-    sfnt[dp + 9]  = (cursor2 >>> 16) & 0xff;
-    sfnt[dp + 10] = (cursor2 >>> 8)  & 0xff;
-    sfnt[dp + 11] =  cursor2         & 0xff;
-    sfnt[dp + 12] = (e.data.length >>> 24) & 0xff;
-    sfnt[dp + 13] = (e.data.length >>> 16) & 0xff;
-    sfnt[dp + 14] = (e.data.length >>> 8)  & 0xff;
-    sfnt[dp + 15] =  e.data.length         & 0xff;
-    dp += 16;
-    sfnt.set(e.data, cursor2);
-    cursor2 += e.data.length + e.pad;
-  }
-
-  let flavor;
-  if      (flavorRaw === TTF_FLAVOR) flavor = "ttf";
-  else if (flavorRaw === OTF_FLAVOR) flavor = "otf";
-  else                               flavor = "ttf";
-
-  return { flavor, sfnt: sfnt.buffer };
+  // ── build SFNT ── (anything that isn't "OTTO" is treated as TrueType)
+  const tables = Object.entries(rawTables).map(([tag, t]) => ({ tag, data: t.data }));
+  return {
+    flavor: flavorRaw === OTF_FLAVOR ? "otf" : "ttf",
+    sfnt: buildSfnt(flavorRaw, tables),
+  };
 }
 
 export async function parseWOFF2(buffer, opts = {}) {
@@ -440,7 +383,8 @@ export async function parseWOFF2(buffer, opts = {}) {
   return parseTTF(sfnt);
 }
 
-export const loadWOFF2 = url => fetch(url).then(r => r.arrayBuffer()).then(parseWOFF2);
+export const loadWOFF2 = (url, opts) =>
+  fetch(url).then(r => r.arrayBuffer()).then(b => parseWOFF2(b, opts));
 
 export default class WOFF2FontParser {
   load = loadWOFF2;
